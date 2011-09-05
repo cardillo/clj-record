@@ -12,6 +12,5 @@
 
 (defn reset-db [project]
   (leiningen.compile/eval-in-project project
-    '(do
-      (require 'clj-record.test-helper)
-      (clj-record.test-helper/reset-db))))
+    `(clj-record.test-helper/reset-db)
+      nil nil `(require 'clj-record.test-helper)))
