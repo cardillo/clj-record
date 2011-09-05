@@ -1,9 +1,11 @@
 (ns clj-record.core-test
   (:require
     [clj-record.core :as core]
+    [clj-record.meta :as meta]
     [clj-record.query :as query]
     [clj-record.test-model.manufacturer :as manufacturer]
-    [clj-record.test-model.product :as product])
+    [clj-record.test-model.product :as product]
+    [clj-record.test-model.others :as others])
   (:use clojure.test
         clj-record.test-helper))
 
@@ -136,3 +138,21 @@
 
 (deftest transaction-and-defined-callback-test
   (is (manufacturer/first-record)))
+
+(deftest pk-name-can-be-unconventional-with-pk-name-option-to-init-model
+  (is (= "otherpk" (meta/pk-for "others"))))
+
+(deftest pk-name-is-available-on-each-model-namespace
+  (is (= "id" (manufacturer/pk-name)))
+  (is (= "otherpk" (others/pk-name))))
+
+(defdbtest insert-returns-id-of-new-record-with-unconventional-id
+  (let [id (others/insert {:something "hello"})
+        o (others/get-record id)]
+    (is (not (nil? id)))
+    (is (= "hello" (o :something)))
+    (is (= id (o :otherpk)))))
+
+(defdbtest get-record-does-a-lookup-by-id-with-unconventional-id
+  (let [o (others/create {:something "bonjour"})]
+    (is (= o (others/get-record (o :otherpk))))))

@@ -14,8 +14,29 @@
   [model-name tbl-name]
   (dosync (set-model-metadata-for model-name :table-name tbl-name)))
 
+(defn set-pk-name
+  "Puts pk-name into model metadata."
+  [model-name pk-name]
+  (dosync (set-model-metadata-for model-name :pk-name pk-name)))
+
 (defn set-db-spec [model-name db-spec]
   (dosync (set-model-metadata-for model-name :db-spec db-spec)))
+
+(defn- to-db-names
+  "Convert keyword names to database column names."
+  [model-name attributes]
+  (if (contains? attributes :id)
+    (assoc (dissoc attributes :id)
+      (keyword (pk-for model-name)) (attributes :id))
+    attributes))
+
+(defn- to-key-names
+  "Convert database column names to keyword names."
+  [model-name attributes]
+  (let [pk (keyword (pk-for model-name))]
+    (if (contains? attributes pk)
+      (assoc (dissoc attributes pk) :id (attributes pk))
+      attributes)))
 
 (defn to-conditions
   "Converts the given attribute map into a clojure.contrib.sql style 'where-params,'
@@ -79,7 +100,7 @@ instance."
   [model-name attributes-or-where-params]
   (let [[parameterized-where & values]
           (if (map? attributes-or-where-params)
-            (to-conditions attributes-or-where-params)
+            (to-conditions (to-db-names model-name attributes-or-where-params))
             attributes-or-where-params)
           select-query (format "select * from %s where %s" (table-name model-name) parameterized-where)]
     (find-by-sql model-name (apply vector select-query values))))
@@ -97,7 +118,7 @@ instance."
   ([model-name attributes-or-where-params]
      (let [[parameterized-where & values]
            (if (map? attributes-or-where-params)
-             (to-conditions attributes-or-where-params)
+             (to-conditions (to-db-names model-name attributes-or-where-params))
              attributes-or-where-params)
            select-query (format "select count(*) as count from %s where %s" (table-name model-name) parameterized-where)]
        (:count (first (find-by-sql model-name (apply vector select-query values)))))))
@@ -112,11 +133,14 @@ instance."
   "Inserts a record populated with attributes and returns the generated id."
   [model-name attributes]
   (transaction (db-spec-for model-name)
-    (let [attributes (before-insert model-name (before-save model-name attributes))]
+    (let [attributes (to-db-names model-name
+           (before-insert model-name (before-save model-name attributes)))
+          pk (keyword (pk-for model-name))]
       (sql/insert-values (table-name model-name) (keys attributes) (vals attributes)))
     (sql/with-query-results rows [(id-query-for (db-spec-for model-name) (table-name model-name))]
-      (let [id (val (first (first rows)))]
-        (after-save model-name (after-insert model-name (assoc attributes :id id)))
+      (let [id (val (first (first rows)))
+            pk (keyword (pk-for model-name))]
+        (after-save model-name (after-insert model-name (assoc attributes pk id)))
         id))))
 
 (defn create
@@ -130,10 +154,11 @@ instance."
   "Updates by (partial-record :id), updating only those columns included in partial-record."
   [model-name partial-record]
   (connected (db-spec-for model-name)
-    (let [id (partial-record :id)
-          partial-record (-> partial-record (run-callbacks model-name :before-save :before-update) (dissoc :id))]
-      (sql/update-values (table-name model-name) ["id = ?" id] partial-record)
-      (let [output-record (assoc partial-record :id id)]
+    (let [pk (keyword (pk-for model-name))
+          id (partial-record pk)
+          partial-record (-> partial-record (run-callbacks model-name :before-save :before-update) (dissoc pk))]
+      (sql/update-values (table-name model-name) [(str (pk-for model-name) " = ?") id] partial-record)
+      (let [output-record (assoc partial-record pk id)]
         (after-save model-name (after-update model-name output-record))
         output-record))))
 
@@ -142,14 +167,15 @@ instance."
   [model-name record]
   (connected (db-spec-for model-name)
     (before-destroy model-name record)
-    (sql/delete-rows (table-name model-name) ["id = ?" (:id record)])
+    (sql/delete-rows (table-name model-name) [(str (pk-for model-name) " = ?") ((keyword (pk-for model-name)) record)])
     (after-destroy model-name record)))
 
 (defn destroy-records
   "Deletes all records matching (-> attributes to-conditions), 
   running before- and after-destroy callbacks on each matching record."
   [model-name attributes]
-  (let [conditions (to-conditions attributes)
+  (let [conditions
+          (to-conditions (to-db-names model-name attributes))
         model-table-name (table-name model-name)
         [parameterized-where & values] conditions
         select-query (format "select * from %s where %s" model-table-name parameterized-where)]
@@ -165,7 +191,8 @@ instance."
   "Deletes all records matching (-> attributes to-conditions) without running callbacks."
   [model-name attributes]
   (connected (db-spec-for model-name)
-    (sql/delete-rows (table-name model-name) (to-conditions attributes))))
+    (sql/delete-rows (table-name model-name)
+      (to-db-names model-name (to-conditions attributes)))))
 
 (defn- defs-from-option-groups [model-name option-groups]
   (reduce
@@ -199,16 +226,20 @@ instance."
   (let [model-name (last (str-utils/re-split #"\." (name (ns-name *ns*))))
         [top-level-options option-groups] (split-out-init-options init-options)
         tbl-name (or (top-level-options :table-name) (dashes-to-underscores (pluralize model-name)))
+        pk-name (or (top-level-options :pk-name) "id")
         optional-defs (defs-from-option-groups model-name option-groups)]
     `(do
       (init-model-metadata ~model-name)
       (set-db-spec ~model-name ~'db)
       (set-table-name ~model-name ~tbl-name)
+      (set-pk-name ~model-name ~pk-name)
       (def ~'model-name ~model-name)
       (def ~'table-name (table-name ~model-name))
+      (def ~'pk-name (pk-for ~model-name))
       (defn ~'model-metadata [& args#]
         (apply model-metadata-for ~model-name args#))
       (defn ~'table-name [] (table-name ~model-name))
+      (defn ~'pk-name [] (pk-for ~model-name))
       (defn ~'record-count 
         ([] (record-count ~model-name))
         ([attributes#] (record-count ~model-name attributes#)))

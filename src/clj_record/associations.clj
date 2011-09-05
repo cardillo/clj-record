@@ -1,5 +1,5 @@
 (ns clj-record.associations
-  (:use clj-record.util))
+  (:use (clj-record util meta)))
 
 
 (defn expand-init-option
@@ -28,9 +28,11 @@
         destroy-fn-name (symbol (str "destroy-" association-name))]
     `(do
       (defn ~find-fn-name [record#]
-        (clj-record.core/find-records ~associated-model-name {~foreign-key-attribute (record# :id)}))
+        (clj-record.core/find-records ~associated-model-name {~foreign-key-attribute
+          (record# (keyword (~pk-for ~associated-model-name)))}))
       (defn ~destroy-fn-name [record#]
-        (clj-record.core/destroy-records ~associated-model-name {~foreign-key-attribute (record# :id)})))))
+        (clj-record.core/destroy-records ~associated-model-name {~foreign-key-attribute
+          (record# (keyword (~pk-for ~associated-model-name)))})))))
 
 (defn belongs-to
   "Defines an association to a model named association-name.

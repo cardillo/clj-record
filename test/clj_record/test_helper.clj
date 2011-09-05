@@ -58,7 +58,11 @@
     
     :thing_two
       [ (get-id-key-spec db "thing_two_pk")
-        [:thing_one_id   :int "NOT NULL"] ] })
+        [:thing_one_id   :int "NOT NULL"] ]
+  
+    :others
+      [ (cons :otherpk (rest (get-id-key-spec db "others_pk")))
+        [:something "VARCHAR(32)" "NOT NULL" ] ] })
 
 (defn drop-tables
   ([] (drop-tables (keys table-specs)))
